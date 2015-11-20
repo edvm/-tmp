@@ -1,0 +1,102 @@
+#!/usr/bin/env python
+
+# USAGE:
+# [edvm@mitsuki ~]$ git-log-resume -h
+# usage: git-log-resume [-h] -r REPO [-o OUTPUT] [-s SINCE] [-p] [-e EMAIL]
+#
+# optional arguments:
+#   -h, --help            show this help message and exit
+#   -r REPO, --repo REPO  Git repository
+#   -o OUTPUT, --output OUTPUT
+#                         Output file
+#   -s SINCE, --since SINCE
+#                         Since when? Default 2 weeks
+#   -p, --paste           Nice output to paste
+#   -e EMAIL, --email EMAIL
+#                         Only report commits from this email
+#
+#
+# For example:
+#
+# [edvm@mitsuki ~]$ git-log-resume -r ~/Work/secur1ty/purify/ -p -e edvm@fedoraproject.org
+# 2015-11-19
+# Merge branch 'staging'
+# tools to list nicknames that match more than one user profile and to get users without a userprofile created
+# Merge branch 'staging'
+# Complete task #382
+#
+# 2015-11-18
+# Merge branch 'staging'
+# small typo on removing site alarm
+#
+
+
+import os
+import sys
+import shlex
+import argparse
+import subprocess
+import collections
+
+
+GIT_COMMIT_FIELDS = ['author_name', 'author_email', 'date', 'message']
+GIT_LOG_FORMAT = ['%an', '%ae', '%ad', '%s']
+GIT_LOG_FORMAT = '%x1f'.join(GIT_LOG_FORMAT) + '%x1e'
+
+
+def get_git_log(path, since):
+    # Thanks http://blog.lost-theory.org/post/how-to-parse-git-log-output/
+    os.chdir(path)
+    cmd = shlex.split('git log --date=short --pretty=format:"{}" --since={}'.format(GIT_LOG_FORMAT, since))
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE)
+    log, _ = process.communicate()
+    log = log.strip(b"\n\x1e").split(b"\x1e")
+    log = [row.strip().split(b"\x1f") for row in log]
+    log = [dict(zip(GIT_COMMIT_FIELDS, row)) for row in log]
+    return log
+
+
+def group_by_date(log):
+    lines = collections.OrderedDict()
+    for line in log:
+        date = line.pop('date')
+        if date not in lines:
+            lines[date] = []
+        lines[date].append(line)
+    return lines
+
+
+def paste_log(log, args):
+    log = group_by_date(log)
+    lines = []
+    email = args.email or None
+
+    for date in log:
+        content = log[date]
+        line = '%s\n' % date.decode()
+        for c in content:
+            if email and c.get('author_email') != bytes(email, 'utf-8'):
+                continue
+            msg = "%s\n" % c.get('message').decode()
+            line = ''.join((line, msg))
+        lines.append(line)
+
+    return lines
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-r', '--repo', required=True, help="Git repository")
+    parser.add_argument('-o', '--output', help="Output file")
+    parser.add_argument('-s', '--since', help="Since when? Default 2 weeks")
+    parser.add_argument('-p', '--paste', action='store_true', help="Nice output to paste")
+    parser.add_argument('-e', '--email', help="Only report commits from this email")
+    args = parser.parse_args()
+    repo = args.repo
+    since = args.since or "2.weeks"
+    output = args.output or sys.stdout
+    email = args.email or None
+    log = get_git_log(repo, since)
+    if args.paste:
+        for line in paste_log(log, args):
+            print(line)
